@@ -1,0 +1,6 @@
+*.cmi
+*.o
+*.cmx
+describe-dune
+describe-dune.1
+result*

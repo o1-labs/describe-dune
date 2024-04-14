@@ -1,0 +1,29 @@
+opam-version: "2.0"
+name: "describe-dune"
+version: "0.1"
+maintainer: "George Agapov <george@o1labs.org>"
+authors: "George Agapov <george@o1labs.org>"
+license: "Apache License 2.0"
+homepage: "https://github.com/o1-labs/describe-dune"
+bug-reports: "https://github.com/o1-labs/describe-dune/issues"
+depends: [
+  "ocaml" {>= "4.03.0"}
+  "ocamlfind"
+  "cmdliner" {>= "1.0.0"}
+  "yojson" {>= "1.7.0"}
+  "parsexp"
+  "base"
+  "stdio"
+]
+build: [
+  [make "COMP=ocamlc" {!ocaml:native}]
+]
+dev-repo: "git+https://github.com/o1-labs/describe-dune.git"
+synopsis: "Command-line tool for extracting dependencies from dune files"
+description: """
+describe-dune reads file in the dune file format and outputs some metadata in JSON format
+(most importantly, library and file dependencies).
+
+The specification for the syntax itself is available at:
+    https://dune.readthedocs.io/en/stable/reference/dune/index.html
+"""

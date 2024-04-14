@@ -1,0 +1,2 @@
+bin: ["describe-dune"]
+man: ["describe-dune.1"]
