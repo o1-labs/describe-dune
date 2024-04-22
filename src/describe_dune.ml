@@ -22,15 +22,28 @@ let load_exn ~filename =
       loop Many_and_positions.Stack.empty )
 
 type dune_unit =
-  { name : string; public_name : string option; package : string option }
+  { name : string
+  ; public_name : string option
+  ; package : string option
+  ; implements : string option
+  ; default_implementation : string option
+  }
 
-let unit_to_json ({ name; public_name; package }, type_) =
+let unit_to_json
+    ({ name; public_name; package; implements; default_implementation }, type_)
+    =
   let type_json = match type_ with `Executable -> "exe" | `Library -> "lib" in
   let res =
     [ ("name", `String name); ("type", `String type_json) ]
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("public_name", `String v) ])
         public_name
+    @ Option.value_map ~default:[]
+        ~f:(fun v -> [ ("implements", `String v) ])
+        implements
+    @ Option.value_map ~default:[]
+        ~f:(fun v -> [ ("default_implementation", `String v) ])
+        default_implementation
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("package", `String v) ])
         package
@@ -182,8 +195,15 @@ let process_unit type_ args =
   let name = find_single_value "name" args in
   let public_name = find_single_value_opt "public_name" args in
   let package = find_single_value_opt "package" args in
+  let default_implementation =
+    find_single_value_opt "default_implementation" args
+  in
+  let implements = find_single_value_opt "implements" args in
   let deps, file_deps = extract_unit_deps args in
-  { units = [ ({ name; public_name; package }, type_) ]
+  { units =
+      [ ( { name; public_name; package; implements; default_implementation }
+        , type_ )
+      ]
   ; deps
   ; file_deps
   ; file_outs = []
@@ -194,12 +214,26 @@ let process_executables args =
   let names = find_multi_value "names" args in
   let public_names = find_multi_value_opt "public_names" args in
   let deps, file_deps = extract_unit_deps args in
-  let mk_unit name = ({ public_name = None; name; package }, `Executable) in
+  let mk_unit name =
+    ( { public_name = None
+      ; name
+      ; package
+      ; implements = None
+      ; default_implementation = None
+      }
+    , `Executable )
+  in
   let mk_unit2 name public_name =
     let public_name =
       if String.equal public_name "-" then None else Some public_name
     in
-    ({ public_name; name; package }, `Executable)
+    ( { public_name
+      ; name
+      ; package
+      ; implements = None
+      ; default_implementation = None
+      }
+    , `Executable )
   in
   let units =
     match public_names with
@@ -330,6 +364,8 @@ and process_sexp_file filename =
 type process_dir_result =
   { children : dune_info list; descendants : dune_info list; success : bool }
 
+type process_dir_ctx = string list (* list of files to be added to file_deps *)
+
 let def_pd_result = { children = []; descendants = []; success = true }
 
 let merge_pd_result s t =
@@ -340,8 +376,8 @@ let merge_pd_result s t =
 
 let merge_pd_results = List.fold_left ~init:def_pd_result ~f:merge_pd_result
 
-let rec process_dir : string -> process_dir_result =
- fun dir ->
+let rec process_dir : process_dir_ctx -> string -> process_dir_result =
+ fun ctx dir ->
   (* TODO read dune-project, accept dune-file if specified *)
   let dune_file = Stdlib.Filename.concat dir "dune" in
   let dune_opt, ok =
@@ -355,27 +391,47 @@ let rec process_dir : string -> process_dir_result =
       Stdlib.Printf.eprintf "Error on file %s: %s\n" dune_file (Exn.to_string e) ;
       (None, false)
   in
+  let chop_prefix =
+    if dir == "." then Fn.id else String.chop_prefix_exn ~prefix:(dir ^ "/")
+  in
   let continue_f sub_result =
     match dune_opt with
     | None ->
         { sub_result with success = sub_result.success && ok }
-    | Some dune ->
-        let subdirs = List.map ~f:(fun { src; _ } -> src) sub_result.children in
+    | Some dune_ ->
+        let dune = { dune_ with file_deps = dune_.file_deps @ ctx } in
+        let subdirs =
+          List.map ~f:(fun { src; _ } -> chop_prefix src) sub_result.children
+        in
         { children = [ { src = dir; dune; subdirs } ]
         ; descendants = sub_result.children @ sub_result.descendants
         ; success = ok || sub_result.success
         }
   in
-  Stdlib.Sys.readdir dir |> Array.to_list
-  |> List.filter_map ~f:(fun f ->
-         let f' =
-           if String.equal dir "." then f else Stdlib.Filename.concat dir f
-         in
-         if Stdlib.Sys.is_directory f' then Some (process_dir f') else None )
+  let dir_contents = Stdlib.Sys.readdir dir |> Array.to_list in
+  let ctx' =
+    ctx
+    @ List.filter_map dir_contents ~f:(fun f ->
+          let f' =
+            if String.equal dir "." then f else Stdlib.Filename.concat dir f
+          in
+          Option.some_if
+            String.(
+              equal f "opam" || equal f "dune-project"
+              || is_suffix ~suffix:".opam" f)
+            f' )
+  in
+  List.filter_map dir_contents ~f:(fun f ->
+      let f' =
+        if String.equal dir "." then f else Stdlib.Filename.concat dir f
+      in
+      try
+        if Stdlib.Sys.is_directory f' then Some (process_dir ctx' f') else None
+      with _ -> None )
   |> merge_pd_results |> continue_f
 
 let run () =
-  let { children; descendants; success } = process_dir "." in
+  let { children; descendants; success } = process_dir [] "." in
   Yojson.Basic.to_channel Stdio.stdout (result_to_json (children @ descendants)) ;
   if not success then Stdlib.exit 10
 
