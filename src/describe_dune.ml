@@ -32,7 +32,15 @@ type dune_unit =
 let unit_to_json
     ({ name; public_name; package; implements; default_implementation }, type_)
     =
-  let type_json = match type_ with `Executable -> "exe" | `Library -> "lib" in
+  let type_json =
+    match type_ with
+    | `Executable ->
+        "exe"
+    | `Library ->
+        "lib"
+    | `Test ->
+        "test"
+  in
   let res =
     [ ("name", `String name); ("type", `String type_json) ]
     @ Option.value_map ~default:[]
@@ -51,7 +59,7 @@ let unit_to_json
   `Assoc res
 
 type dune =
-  { units : (dune_unit * [ `Executable | `Library ]) list
+  { units : (dune_unit * [ `Executable | `Library | `Test ]) list
   ; deps : string list
   ; file_deps : string list
   ; file_outs : string list
@@ -209,7 +217,7 @@ let process_unit type_ args =
   ; file_outs = []
   }
 
-let process_executables args =
+let process_executables type_ args =
   let package = find_single_value_opt "package" args in
   let names = find_multi_value "names" args in
   let public_names = find_multi_value_opt "public_names" args in
@@ -221,7 +229,7 @@ let process_executables args =
       ; implements = None
       ; default_implementation = None
       }
-    , `Executable )
+    , type_ )
   in
   let mk_unit2 name public_name =
     let public_name =
@@ -233,7 +241,7 @@ let process_executables args =
       ; implements = None
       ; default_implementation = None
       }
-    , `Executable )
+    , type_ )
   in
   let units =
     match public_names with
@@ -326,8 +334,12 @@ let rec process_sexp' ~dir ~args = function
       process_unit `Library args
   | "executable" | "toplevel" ->
       process_unit `Executable args
+  | "test" ->
+      process_unit `Test args
+  | "tests" ->
+      process_executables `Test args
   | "executables" ->
-      process_executables args
+      process_executables `Executable args
   | "rule" ->
       let file_outs, file_deps = extract_rule_deps args in
       { units = []; deps = []; file_deps; file_outs }
