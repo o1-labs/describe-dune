@@ -200,22 +200,33 @@ let extract_unit_deps args =
         (ds, fs) )
 
 let process_unit type_ args =
-  let name = find_single_value "name" args in
-  let public_name = find_single_value_opt "public_name" args in
-  let package = find_single_value_opt "package" args in
-  let default_implementation =
-    find_single_value_opt "default_implementation" args
+  (* Allow to permanently disable units, as a hacky debugging method *)
+  let is_disabled =
+    find_stanza_opt "enabled_if" args
+    |> Option.value_map ~default:false ~f:(function
+         | Sexp.List (_ :: Atom "false" :: _) ->
+             true
+         | _ ->
+             false )
   in
-  let implements = find_single_value_opt "implements" args in
-  let deps, file_deps = extract_unit_deps args in
-  { units =
-      [ ( { name; public_name; package; implements; default_implementation }
-        , type_ )
-      ]
-  ; deps
-  ; file_deps
-  ; file_outs = []
-  }
+  if is_disabled then empty_dune
+  else
+    let name = find_single_value "name" args in
+    let public_name = find_single_value_opt "public_name" args in
+    let package = find_single_value_opt "package" args in
+    let default_implementation =
+      find_single_value_opt "default_implementation" args
+    in
+    let implements = find_single_value_opt "implements" args in
+    let deps, file_deps = extract_unit_deps args in
+    { units =
+        [ ( { name; public_name; package; implements; default_implementation }
+          , type_ )
+        ]
+    ; deps
+    ; file_deps
+    ; file_outs = []
+    }
 
 let process_executables type_ args =
   let package = find_single_value_opt "package" args in
