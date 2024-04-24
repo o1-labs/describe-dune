@@ -27,11 +27,14 @@ type dune_unit =
   ; package : string option
   ; implements : string option
   ; default_implementation : string option
+  ; deps : string list
   }
 
+let str x = `String x
+
 let unit_to_json
-    ({ name; public_name; package; implements; default_implementation }, type_)
-    =
+    ( { name; public_name; package; implements; default_implementation; deps }
+    , type_ ) =
   let type_json =
     match type_ with
     | `Executable ->
@@ -42,7 +45,10 @@ let unit_to_json
         "test"
   in
   let res =
-    [ ("name", `String name); ("type", `String type_json) ]
+    [ ("name", `String name)
+    ; ("type", `String type_json)
+    ; ("deps", `List (List.map ~f:str deps))
+    ]
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("public_name", `String v) ])
         public_name
@@ -60,33 +66,28 @@ let unit_to_json
 
 type dune =
   { units : (dune_unit * [ `Executable | `Library | `Test ]) list
-  ; deps : string list
   ; file_deps : string list
   ; file_outs : string list
   }
 
 let is_empty_dune = function
-  | { units = []; deps = []; file_deps = []; file_outs = [] } ->
+  | { units = []; file_deps = []; file_outs = [] } ->
       true
   | _ ->
       false
 
-let empty_dune = { units = []; deps = []; file_deps = []; file_outs = [] }
+let empty_dune = { units = []; file_deps = []; file_outs = [] }
 
 let merge_dune a b =
   { units = a.units @ b.units
-  ; deps = a.deps @ b.deps
   ; file_deps = a.file_deps @ b.file_deps
   ; file_outs = a.file_outs @ b.file_outs
   }
 
 type dune_info = { dune : dune; src : string; subdirs : string list }
 
-let str x = `String x
-
-let dune_to_json { units; deps; file_deps; file_outs } =
+let dune_to_json { units; file_deps; file_outs } =
   [ ("units", `List (List.map ~f:unit_to_json units))
-  ; ("deps", `List (List.map ~f:str deps))
   ; ("file_deps", `List (List.map ~f:str file_deps))
   ; ("file_outs", `List (List.map ~f:str file_outs))
   ]
@@ -220,10 +221,15 @@ let process_unit type_ args =
     let implements = find_single_value_opt "implements" args in
     let deps, file_deps = extract_unit_deps args in
     { units =
-        [ ( { name; public_name; package; implements; default_implementation }
+        [ ( { name
+            ; public_name
+            ; package
+            ; deps
+            ; implements
+            ; default_implementation
+            }
           , type_ )
         ]
-    ; deps
     ; file_deps
     ; file_outs = []
     }
@@ -237,6 +243,7 @@ let process_executables type_ args =
     ( { public_name = None
       ; name
       ; package
+      ; deps
       ; implements = None
       ; default_implementation = None
       }
@@ -249,6 +256,7 @@ let process_executables type_ args =
     ( { public_name
       ; name
       ; package
+      ; deps
       ; implements = None
       ; default_implementation = None
       }
@@ -261,7 +269,7 @@ let process_executables type_ args =
     | None ->
         List.map ~f:mk_unit names
   in
-  { units; deps; file_deps; file_outs = [] }
+  { units; file_deps; file_outs = [] }
 
 let filepath_parts =
   let rec loop acc fname =
@@ -300,7 +308,7 @@ let normalize_path_parts =
          | _ ->
              el :: acc )
 
-let normalize_dune ~dir { units; deps; file_deps; file_outs } =
+let normalize_dune ~dir { units; file_deps; file_outs } =
   let dir_parts = filepath_parts dir in
   let dir_len = List.length dir_parts in
   let f path =
@@ -317,11 +325,7 @@ let normalize_dune ~dir { units; deps; file_deps; file_outs } =
   let file_deps' = List.map ~f file_deps in
   let file_outs' = List.map ~f file_outs in
   let dedup = List.dedup_and_sort ~compare:String.compare in
-  { units
-  ; deps = dedup deps
-  ; file_deps = dedup file_deps'
-  ; file_outs = dedup file_outs'
-  }
+  { units; file_deps = dedup file_deps'; file_outs = dedup file_outs' }
 
 let extract_rule_subdeps name args =
   match name with
@@ -353,7 +357,7 @@ let rec process_sexp' ~dir ~args = function
       process_executables `Executable args
   | "rule" ->
       let file_outs, file_deps = extract_rule_deps args in
-      { units = []; deps = []; file_deps; file_outs }
+      { units = []; file_deps; file_outs }
   | "include" ->
       let file =
         match args with
