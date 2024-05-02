@@ -68,29 +68,34 @@ type dune =
   { units : (dune_unit * [ `Executable | `Library | `Test ]) list
   ; file_deps : string list
   ; file_outs : string list
+  ; include_subdirs : string option
   }
 
 let is_empty_dune = function
-  | { units = []; file_deps = []; file_outs = [] } ->
+  | { units = []; file_deps = []; file_outs = []; include_subdirs = None } ->
       true
   | _ ->
       false
 
-let empty_dune = { units = []; file_deps = []; file_outs = [] }
+let empty_dune =
+  { units = []; file_deps = []; file_outs = []; include_subdirs = None }
 
 let merge_dune a b =
   { units = a.units @ b.units
   ; file_deps = a.file_deps @ b.file_deps
   ; file_outs = a.file_outs @ b.file_outs
+  ; include_subdirs = Option.first_some a.include_subdirs b.include_subdirs
   }
 
 type dune_info = { dune : dune; src : string; subdirs : string list }
 
-let dune_to_json { units; file_deps; file_outs } =
+let dune_to_json { units; file_deps; file_outs; include_subdirs } =
   [ ("units", `List (List.map ~f:unit_to_json units))
   ; ("file_deps", `List (List.map ~f:str file_deps))
   ; ("file_outs", `List (List.map ~f:str file_outs))
   ]
+  @ Option.value_map include_subdirs ~default:[] ~f:(fun sd ->
+        [ ("include_subdirs", `String sd) ] )
 
 let dune_info_to_json { dune; src; subdirs } =
   `Assoc
@@ -232,6 +237,7 @@ let process_unit type_ args =
         ]
     ; file_deps
     ; file_outs = []
+    ; include_subdirs = None
     }
 
 let process_executables type_ args =
@@ -269,7 +275,7 @@ let process_executables type_ args =
     | None ->
         List.map ~f:mk_unit names
   in
-  { units; file_deps; file_outs = [] }
+  { units; file_deps; file_outs = []; include_subdirs = None }
 
 let filepath_parts =
   let rec loop acc fname =
@@ -308,7 +314,7 @@ let normalize_path_parts =
          | _ ->
              el :: acc )
 
-let normalize_dune ~dir { units; file_deps; file_outs } =
+let normalize_dune ~dir { units; file_deps; file_outs; include_subdirs } =
   let dir_parts = filepath_parts dir in
   let dir_len = List.length dir_parts in
   let f path =
@@ -325,7 +331,11 @@ let normalize_dune ~dir { units; file_deps; file_outs } =
   let file_deps' = List.map ~f file_deps in
   let file_outs' = List.map ~f file_outs in
   let dedup = List.dedup_and_sort ~compare:String.compare in
-  { units; file_deps = dedup file_deps'; file_outs = dedup file_outs' }
+  { units
+  ; file_deps = dedup file_deps'
+  ; file_outs = dedup file_outs'
+  ; include_subdirs
+  }
 
 let extract_rule_subdeps name args =
   match name with
@@ -357,7 +367,7 @@ let rec process_sexp' ~dir ~args = function
       process_executables `Executable args
   | "rule" ->
       let file_outs, file_deps = extract_rule_deps args in
-      { units = []; file_deps; file_outs }
+      { units = []; file_deps; file_outs; include_subdirs = None }
   | "include" ->
       let file =
         match args with
@@ -373,6 +383,19 @@ let rec process_sexp' ~dir ~args = function
       { processed with
         file_deps = file :: List.map ~f processed.file_deps
       ; file_outs = List.map ~f processed.file_outs
+      }
+  | "include_subdirs" ->
+      let value =
+        match args with
+        | [ Sexp.Atom s ] ->
+            s
+        | _ ->
+            failwith "invalid include_subdirs stanza"
+      in
+      { units = []
+      ; file_deps = []
+      ; file_outs = []
+      ; include_subdirs = Some value
       }
   | _ ->
       empty_dune
