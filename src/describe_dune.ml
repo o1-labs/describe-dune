@@ -21,6 +21,9 @@ let load_exn ~filename =
       in
       loop Many_and_positions.Stack.empty )
 
+type modules =
+  { with_standard : bool; include_ : string list; exclude : string list }
+
 type dune_unit =
   { name : string
   ; public_name : string option
@@ -28,12 +31,26 @@ type dune_unit =
   ; implements : string option
   ; default_implementation : string option
   ; deps : string list
+  ; modules : modules option
   }
 
 let str x = `String x
 
+let modules_to_json_fields { with_standard; include_; exclude } =
+  [ ("with_standard", `Bool with_standard)
+  ; ("include", `List (List.map ~f:str include_))
+  ; ("exclude", `List (List.map ~f:str exclude))
+  ]
+
 let unit_to_json
-    ( { name; public_name; package; implements; default_implementation; deps }
+    ( { name
+      ; public_name
+      ; package
+      ; implements
+      ; default_implementation
+      ; deps
+      ; modules
+      }
     , type_ ) =
   let type_json =
     match type_ with
@@ -61,6 +78,9 @@ let unit_to_json
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("package", `String v) ])
         package
+    @ Option.value_map ~default:[]
+        ~f:(fun v -> [ ("modules", `Assoc (modules_to_json_fields v)) ])
+        modules
   in
   `Assoc res
 
@@ -205,6 +225,41 @@ let extract_unit_deps args =
     | _ ->
         (ds, fs) )
 
+let rec parse_module_list = function
+  | Sexp.Atom ":standard" ->
+      (true, [])
+  | Atom "\\" ->
+      failwith "exclusion is only supported on the top-level of modules"
+  | Atom s when String.is_prefix ~prefix:":" s ->
+      failwith ("Unsupported atom " ^ s ^ "in modules stanza")
+  | Atom s ->
+      (false, [ s ])
+  | List s ->
+      List.fold_left ~init:(false, []) s
+        ~f:(fun (with_standard, modules) sexp ->
+          let with_standard', modules' = parse_module_list sexp in
+          (with_standard' || with_standard, modules @ modules') )
+
+let rec parse_modules_toplevel = function
+  | [ Sexp.List ls ] ->
+      parse_modules_toplevel ls
+  | [ s; Atom "\\"; t ] ->
+      let with_standard, include_ = parse_module_list s in
+      let with_standard', exclude = parse_module_list t in
+      if with_standard' then failwith "Do not support :standard in exclude list"
+      else { with_standard; include_; exclude }
+  | ls ->
+      let with_standard, include_ = parse_module_list (Sexp.List ls) in
+      { with_standard; include_; exclude = [] }
+
+let parse_modules_opt name args =
+  find_stanza_opt name args
+  |> Option.map ~f:(function
+       | Sexp.List (_ :: ls) ->
+           parse_modules_toplevel ls
+       | _ ->
+           failwith "Unsupported modules stanza" )
+
 let process_unit type_ args =
   (* Allow to permanently disable units, as a hacky debugging method *)
   let is_disabled =
@@ -224,6 +279,7 @@ let process_unit type_ args =
       find_single_value_opt "default_implementation" args
     in
     let implements = find_single_value_opt "implements" args in
+    let modules = parse_modules_opt "modules" args in
     let deps, file_deps = extract_unit_deps args in
     { units =
         [ ( { name
@@ -232,6 +288,7 @@ let process_unit type_ args =
             ; deps
             ; implements
             ; default_implementation
+            ; modules
             }
           , type_ )
         ]
@@ -244,6 +301,7 @@ let process_executables type_ args =
   let package = find_single_value_opt "package" args in
   let names = find_multi_value "names" args in
   let public_names = find_multi_value_opt "public_names" args in
+  let modules = parse_modules_opt "modules" args in
   let deps, file_deps = extract_unit_deps args in
   let mk_unit name =
     ( { public_name = None
@@ -252,6 +310,7 @@ let process_executables type_ args =
       ; deps
       ; implements = None
       ; default_implementation = None
+      ; modules
       }
     , type_ )
   in
@@ -265,6 +324,7 @@ let process_executables type_ args =
       ; deps
       ; implements = None
       ; default_implementation = None
+      ; modules
       }
     , type_ )
   in
