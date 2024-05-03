@@ -504,20 +504,6 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
   let chop_prefix =
     if dir == "." then Fn.id else String.chop_prefix_exn ~prefix:(dir ^ "/")
   in
-  let continue_f sub_result =
-    match dune_opt with
-    | None ->
-        { sub_result with success = sub_result.success && ok }
-    | Some dune_ ->
-        let dune = { dune_ with file_deps = dune_.file_deps @ ctx } in
-        let subdirs =
-          List.map ~f:(fun { src; _ } -> chop_prefix src) sub_result.children
-        in
-        { children = [ { src = dir; dune; subdirs } ]
-        ; descendants = sub_result.children @ sub_result.descendants
-        ; success = ok || sub_result.success
-        }
-  in
   let dir_contents = Stdlib.Sys.readdir dir |> Array.to_list in
   let ctx' =
     ctx
@@ -530,6 +516,20 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
               equal f "opam" || equal f "dune-project"
               || is_suffix ~suffix:".opam" f)
             f' )
+  in
+  let continue_f sub_result =
+    match dune_opt with
+    | None ->
+        { sub_result with success = sub_result.success && ok }
+    | Some dune_ ->
+        let dune = { dune_ with file_deps = dune_.file_deps @ ctx' } in
+        let subdirs =
+          List.map ~f:(fun { src; _ } -> chop_prefix src) sub_result.children
+        in
+        { children = [ { src = dir; dune; subdirs } ]
+        ; descendants = sub_result.children @ sub_result.descendants
+        ; success = ok || sub_result.success
+        }
   in
   List.filter_map dir_contents ~f:(fun f ->
       let f' =
