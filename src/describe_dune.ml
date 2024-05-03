@@ -502,7 +502,8 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
       (None, false)
   in
   let chop_prefix =
-    if dir == "." then Fn.id else String.chop_prefix_exn ~prefix:(dir ^ "/")
+    if String.equal dir "." then Fn.id
+    else String.chop_prefix_exn ~prefix:(dir ^ "/")
   in
   let dir_contents = Stdlib.Sys.readdir dir |> Array.to_list in
   let ctx' =
@@ -545,7 +546,7 @@ let run () =
   Yojson.Basic.to_channel Stdio.stdout (result_to_json (children @ descendants)) ;
   if not success then Stdlib.exit 10
 
-let cmd = Cmdliner.Term.(pure run $ pure ())
+let cmd = Cmdliner.Term.(const run $ const ())
 
 let main_cmd_info =
   Cmdliner.Term.info "describe-dune" ~version:"0.1"
