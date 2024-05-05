@@ -228,7 +228,21 @@ let extract_unit_subdeps name args =
         |> Option.value ~default:[]
         |> List.filter_map ~f:(function Sexp.Atom s -> Some s | _ -> None)
       in
-      ([], include_dirs)
+      let language_opt = find_single_value_opt "language" args in
+      let names =
+        find_multi_value_opt "names" args |> Option.value ~default:[]
+      in
+      let fnames language =
+        if String.equal language "c" then fun n -> [ n ^ ".c" ]
+        else if String.equal language "cxx" then fun n ->
+          [ n ^ ".cpp"; n ^ ".cxx"; n ^ ".cc" ]
+        else Fn.const []
+      in
+      let c_files =
+        Option.value_map ~default:[] language_opt ~f:(fun l ->
+            List.concat_map ~f:(fnames l) names )
+      in
+      ([], include_dirs @ c_files)
   | _ ->
       ([], [])
 
