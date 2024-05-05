@@ -89,27 +89,39 @@ type dune =
   ; file_deps : string list
   ; file_outs : string list
   ; include_subdirs : string option
+  ; has_env : bool
   }
 
 let is_empty_dune = function
-  | { units = []; file_deps = []; file_outs = []; include_subdirs = None } ->
+  | { units = []
+    ; file_deps = []
+    ; file_outs = []
+    ; include_subdirs = None
+    ; has_env = false
+    } ->
       true
   | _ ->
       false
 
 let empty_dune =
-  { units = []; file_deps = []; file_outs = []; include_subdirs = None }
+  { units = []
+  ; file_deps = []
+  ; file_outs = []
+  ; include_subdirs = None
+  ; has_env = false
+  }
 
 let merge_dune a b =
   { units = a.units @ b.units
   ; file_deps = a.file_deps @ b.file_deps
   ; file_outs = a.file_outs @ b.file_outs
   ; include_subdirs = Option.first_some a.include_subdirs b.include_subdirs
+  ; has_env = a.has_env || b.has_env
   }
 
 type dune_info = { dune : dune; src : string; subdirs : string list }
 
-let dune_to_json { units; file_deps; file_outs; include_subdirs } =
+let dune_to_json { units; file_deps; file_outs; include_subdirs; has_env = _ } =
   [ ("units", `List (List.map ~f:unit_to_json units))
   ; ("file_deps", `List (List.map ~f:str file_deps))
   ; ("file_outs", `List (List.map ~f:str file_outs))
@@ -298,6 +310,7 @@ let process_unit type_ args =
     ; file_deps
     ; file_outs = []
     ; include_subdirs = None
+    ; has_env = false
     }
 
 let process_executables type_ args =
@@ -338,7 +351,7 @@ let process_executables type_ args =
     | None ->
         List.map ~f:mk_unit names
   in
-  { units; file_deps; file_outs = []; include_subdirs = None }
+  { units; file_deps; file_outs = []; include_subdirs = None; has_env = false }
 
 let filepath_parts =
   let rec loop acc fname =
@@ -377,7 +390,8 @@ let normalize_path_parts =
          | _ ->
              el :: acc )
 
-let normalize_dune ~dir { units; file_deps; file_outs; include_subdirs } =
+let normalize_dune ~dir
+    { units; file_deps; file_outs; include_subdirs; has_env } =
   let dir_parts = filepath_parts dir in
   let dir_len = List.length dir_parts in
   let f path =
@@ -398,6 +412,7 @@ let normalize_dune ~dir { units; file_deps; file_outs; include_subdirs } =
   ; file_deps = dedup file_deps'
   ; file_outs = dedup file_outs'
   ; include_subdirs
+  ; has_env
   }
 
 let extract_rule_subdeps name args =
@@ -430,7 +445,7 @@ let rec process_sexp' ~dir ~args = function
       process_executables `Executable args
   | "rule" ->
       let file_outs, file_deps = extract_rule_deps args in
-      { units = []; file_deps; file_outs; include_subdirs = None }
+      { empty_dune with file_deps; file_outs }
   | "include" ->
       let file =
         match args with
@@ -455,11 +470,9 @@ let rec process_sexp' ~dir ~args = function
         | _ ->
             failwith "invalid include_subdirs stanza"
       in
-      { units = []
-      ; file_deps = []
-      ; file_outs = []
-      ; include_subdirs = Some value
-      }
+      { empty_dune with include_subdirs = Some value }
+  | "env" ->
+      { empty_dune with has_env = true }
   | _ ->
       empty_dune
 
@@ -521,6 +534,11 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
               || is_suffix ~suffix:".opam" f)
             f' )
   in
+  let ctx'' =
+    ctx'
+    @ Option.value_map ~default:[] dune_opt ~f:(fun { has_env; file_deps; _ } ->
+          if has_env then dune_file :: file_deps else [] )
+  in
   let continue_f sub_result =
     match dune_opt with
     | None ->
@@ -540,7 +558,7 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
         if String.equal dir "." then f else Stdlib.Filename.concat dir f
       in
       try
-        if Stdlib.Sys.is_directory f' then Some (process_dir ctx' f') else None
+        if Stdlib.Sys.is_directory f' then Some (process_dir ctx'' f') else None
       with _ -> None )
   |> merge_pd_results |> continue_f
 
