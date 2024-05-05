@@ -202,6 +202,9 @@ let extract_unit_subdeps name args =
       (pps, [])
   | "preprocessor_deps" ->
       ([], List.concat_map ~f:parse_file_dependency args)
+  | "js_of_ocaml" ->
+      let files = find_multi_value_opt "javascript_files" args in
+      ([], Option.value ~default:[] files)
   | "foreign_stubs" ->
       let include_dirs =
         find_stanza_opt "include_dirs" args
