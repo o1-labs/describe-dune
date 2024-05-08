@@ -212,11 +212,24 @@ let extract_unit_subdeps name args =
         |> List.filter ~f:(Fn.compose not @@ String.is_prefix ~prefix:"-")
       in
       (pps, [])
+  | "link_deps" ->
+      ([], List.concat_map ~f:parse_file_dependency args)
   | "preprocessor_deps" ->
       ([], List.concat_map ~f:parse_file_dependency args)
   | "js_of_ocaml" ->
       let files = find_multi_value_opt "javascript_files" args in
       ([], Option.value ~default:[] files)
+  | "inline_tests" ->
+      let deps =
+        find_stanza_opt "deps" args
+        |> Option.bind ~f:(function
+             | Sexp.List (_ :: rest) ->
+                 Some rest
+             | _ ->
+                 None )
+        |> Option.value ~default:[]
+      in
+      ([], List.concat_map ~f:parse_file_dependency deps)
   | "foreign_stubs" ->
       let include_dirs =
         find_stanza_opt "include_dirs" args
