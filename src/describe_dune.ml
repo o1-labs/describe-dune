@@ -87,10 +87,54 @@ let unit_to_json
   in
   `Assoc res
 
+type file_out_mode_t = Fallback | Standard | Promote
+
+let choose_file_out_mode =
+  let impl = function
+    | Fallback, b ->
+        b
+    | a, Fallback ->
+        a
+    | Standard, b ->
+        b
+    | a, Standard ->
+        a
+    | Promote, Promote ->
+        Promote
+  in
+  fun a b -> impl (a, b)
+
+let parse_file_out_mode = function
+  | "standard" ->
+      Standard
+  | "fallback" ->
+      Fallback
+  | "promote" ->
+      Promote
+  | s ->
+      failwith ("Unknown file out mode: " ^ s)
+
+let file_out_mode_to_json = function
+  | Standard ->
+      str "standard"
+  | Fallback ->
+      str "fallback"
+  | Promote ->
+      str "promote"
+
+module StringMap = Map.M (String)
+
+type file_outs_t = file_out_mode_t StringMap.t
+
+let empty_file_outs = Map.empty (module String)
+
+let merge_file_outs =
+  Map.merge_skewed ~combine:(fun ~key:_ -> choose_file_out_mode)
+
 type dune =
   { units : (dune_unit * [ `Executable | `Library | `Test ]) list
   ; file_deps : string list
-  ; file_outs : string list
+  ; file_outs : file_outs_t
   ; include_subdirs : string option
   ; has_env : bool
   }
@@ -98,18 +142,18 @@ type dune =
 let is_empty_dune = function
   | { units = []
     ; file_deps = []
-    ; file_outs = []
+    ; file_outs
     ; include_subdirs = None
     ; has_env = false
     } ->
-      true
+      Map.is_empty file_outs
   | _ ->
       false
 
 let empty_dune =
   { units = []
   ; file_deps = []
-  ; file_outs = []
+  ; file_outs = empty_file_outs
   ; include_subdirs = None
   ; has_env = false
   }
@@ -117,7 +161,7 @@ let empty_dune =
 let merge_dune a b =
   { units = a.units @ b.units
   ; file_deps = a.file_deps @ b.file_deps
-  ; file_outs = a.file_outs @ b.file_outs
+  ; file_outs = merge_file_outs a.file_outs b.file_outs
   ; include_subdirs = Option.first_some a.include_subdirs b.include_subdirs
   ; has_env = a.has_env || b.has_env
   }
@@ -127,7 +171,8 @@ type dune_info = { dune : dune; src : string; subdirs : string list }
 let dune_to_json { units; file_deps; file_outs; include_subdirs; has_env = _ } =
   [ ("units", `List (List.map ~f:unit_to_json units))
   ; ("file_deps", `List (List.map ~f:str file_deps))
-  ; ("file_outs", `List (List.map ~f:str file_outs))
+  ; ( "file_outs"
+    , `Assoc (Map.to_alist @@ Map.map ~f:file_out_mode_to_json file_outs) )
   ]
   @ Option.value_map include_subdirs ~default:[] ~f:(fun sd ->
         [ ("include_subdirs", `String sd) ] )
@@ -342,7 +387,7 @@ let process_unit type_ args =
           , type_ )
         ]
     ; file_deps
-    ; file_outs = []
+    ; file_outs = empty_file_outs
     ; include_subdirs = None
     ; has_env = false
     }
@@ -390,7 +435,12 @@ let process_executables type_ args =
     | None ->
         List.map ~f:mk_unit names
   in
-  { units; file_deps; file_outs = []; include_subdirs = None; has_env = false }
+  { units
+  ; file_deps
+  ; file_outs = empty_file_outs
+  ; include_subdirs = None
+  ; has_env = false
+  }
 
 let filepath_parts =
   let rec loop acc fname =
@@ -429,6 +479,14 @@ let normalize_path_parts =
          | _ ->
              el :: acc )
 
+let map_file_out_keys ~f file_outs =
+  Map.to_alist file_outs
+  |> List.fold_left
+       ~f:(fun m (k, v) ->
+         Map.update m (f k)
+           ~f:(Option.value_map ~default:v ~f:(choose_file_out_mode v)) )
+       ~init:empty_file_outs
+
 let normalize_dune ~dir
     { units; file_deps; file_outs; include_subdirs; has_env } =
   let dir_parts = filepath_parts dir in
@@ -445,31 +503,40 @@ let normalize_dune ~dir
     of_filepath_parts @@ prefix @ non_parented
   in
   let file_deps' = List.map ~f file_deps in
-  let file_outs' = List.map ~f file_outs in
+  let file_outs' = map_file_out_keys ~f file_outs in
   let dedup = List.dedup_and_sort ~compare:String.compare in
   { units
   ; file_deps = dedup file_deps'
-  ; file_outs = dedup file_outs'
+  ; file_outs = file_outs'
   ; include_subdirs
   ; has_env
   }
 
-let extract_rule_subdeps name args =
-  match name with
-  | "targets" | "target" ->
-      (multi_value_args args, [])
-  | "deps" ->
-      ([], List.concat_map ~f:parse_file_dependency args)
-  | _ ->
-      ([], [])
-
 let extract_rule_deps args =
-  List.fold_left ~init:([], []) args ~f:(fun (os, ds) -> function
-    | Sexp.List (Atom name :: args') ->
-        let os', ds' = extract_rule_subdeps name args' in
-        (os @ os', ds @ ds')
+  let target_ = find_single_value_opt "target" args in
+  let targets_ = find_multi_value_opt "targets" args in
+  let mode_ = find_single_value_opt "mode" args in
+  let deps =
+    find_stanza_opt "deps" args
+    |> function
+    | Some (Sexp.List (Atom _ :: args)) ->
+        List.concat_map ~f:parse_file_dependency args
     | _ ->
-        (os, ds) )
+        []
+  in
+  let targets =
+    Option.value_map ~default:[] ~f:List.return target_
+    @ Option.value ~default:[] targets_
+  in
+  let mode = Option.value_map ~default:Standard ~f:parse_file_out_mode mode_ in
+  let outs =
+    List.fold_left
+      ~f:
+        (Map.update
+           ~f:(Option.value_map ~default:mode ~f:(choose_file_out_mode mode)) )
+      ~init:empty_file_outs targets
+  in
+  (outs, deps)
 
 let rec process_sexp' ~dir ~args = function
   | "library" ->
@@ -499,7 +566,7 @@ let rec process_sexp' ~dir ~args = function
       let f = Stdlib.Filename.(concat @@ dirname file) in
       { processed with
         file_deps = file :: List.map ~f processed.file_deps
-      ; file_outs = List.map ~f processed.file_outs
+      ; file_outs = map_file_out_keys ~f processed.file_outs
       }
   | "include_subdirs" ->
       let value =
