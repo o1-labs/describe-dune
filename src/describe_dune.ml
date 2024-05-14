@@ -32,6 +32,7 @@ type dune_unit =
   ; default_implementation : string option
   ; deps : string list
   ; modules : modules option
+  ; has_inline_tests : bool
   }
 
 let str x = `String x
@@ -50,6 +51,7 @@ let unit_to_json
       ; default_implementation
       ; deps
       ; modules
+      ; has_inline_tests
       }
     , type_ ) =
   let type_json =
@@ -81,6 +83,7 @@ let unit_to_json
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("modules", `Assoc (modules_to_json_fields v)) ])
         modules
+    @ if has_inline_tests then [ ("has_inline_tests", `Bool true) ] else []
   in
   `Assoc res
 
@@ -322,6 +325,9 @@ let process_unit type_ args =
     in
     let implements = find_single_value_opt "implements" args in
     let modules = parse_modules_opt "modules" args in
+    let has_inline_tests =
+      find_stanza_opt "inline_tests" args |> Option.is_some
+    in
     let deps, file_deps = extract_unit_deps args in
     { units =
         [ ( { name
@@ -331,6 +337,7 @@ let process_unit type_ args =
             ; implements
             ; default_implementation
             ; modules
+            ; has_inline_tests
             }
           , type_ )
         ]
@@ -345,6 +352,9 @@ let process_executables type_ args =
   let names = find_multi_value "names" args in
   let public_names = find_multi_value_opt "public_names" args in
   let modules = parse_modules_opt "modules" args in
+  let has_inline_tests =
+    find_stanza_opt "inline_tests" args |> Option.is_some
+  in
   let deps, file_deps = extract_unit_deps args in
   let mk_unit name =
     ( { public_name = None
@@ -354,6 +364,7 @@ let process_executables type_ args =
       ; implements = None
       ; default_implementation = None
       ; modules
+      ; has_inline_tests
       }
     , type_ )
   in
@@ -368,6 +379,7 @@ let process_executables type_ args =
       ; implements = None
       ; default_implementation = None
       ; modules
+      ; has_inline_tests
       }
     , type_ )
   in
