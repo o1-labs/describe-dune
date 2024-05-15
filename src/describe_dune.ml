@@ -260,6 +260,8 @@ let extract_unit_subdeps name args =
         |> List.filter ~f:(Fn.compose not @@ String.is_prefix ~prefix:"-")
       in
       (pps, [])
+  | "deps" ->
+      ([], List.concat_map ~f:parse_file_dependency args)
   | "link_deps" ->
       ([], List.concat_map ~f:parse_file_dependency args)
   | "preprocessor_deps" ->
