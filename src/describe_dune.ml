@@ -137,6 +137,7 @@ type dune =
   ; file_outs : file_outs_t
   ; include_subdirs : string option
   ; has_env : bool
+  ; data_only_dirs : string list
   }
 
 let is_empty_dune = function
@@ -145,6 +146,7 @@ let is_empty_dune = function
     ; file_outs
     ; include_subdirs = None
     ; has_env = false
+    ; data_only_dirs = []
     } ->
       Map.is_empty file_outs
   | _ ->
@@ -156,6 +158,7 @@ let empty_dune =
   ; file_outs = empty_file_outs
   ; include_subdirs = None
   ; has_env = false
+  ; data_only_dirs = []
   }
 
 let merge_dune a b =
@@ -164,11 +167,19 @@ let merge_dune a b =
   ; file_outs = merge_file_outs a.file_outs b.file_outs
   ; include_subdirs = Option.first_some a.include_subdirs b.include_subdirs
   ; has_env = a.has_env || b.has_env
+  ; data_only_dirs = a.data_only_dirs @ b.data_only_dirs
   }
 
 type dune_info = { dune : dune; src : string; subdirs : string list }
 
-let dune_to_json { units; file_deps; file_outs; include_subdirs; has_env = _ } =
+let dune_to_json
+    { units
+    ; file_deps
+    ; file_outs
+    ; include_subdirs
+    ; has_env = _
+    ; data_only_dirs = _
+    } =
   [ ("units", `List (List.map ~f:unit_to_json units))
   ; ("file_deps", `List (List.map ~f:str file_deps))
   ; ( "file_outs"
@@ -392,6 +403,7 @@ let process_unit type_ args =
     ; file_outs = empty_file_outs
     ; include_subdirs = None
     ; has_env = false
+    ; data_only_dirs = []
     }
 
 let process_executables type_ args =
@@ -442,6 +454,7 @@ let process_executables type_ args =
   ; file_outs = empty_file_outs
   ; include_subdirs = None
   ; has_env = false
+  ; data_only_dirs = []
   }
 
 let filepath_parts =
@@ -490,7 +503,7 @@ let map_file_out_keys ~f file_outs =
        ~init:empty_file_outs
 
 let normalize_dune ~dir
-    { units; file_deps; file_outs; include_subdirs; has_env } =
+    { units; file_deps; file_outs; include_subdirs; has_env; data_only_dirs } =
   let dir_parts = filepath_parts dir in
   let dir_len = List.length dir_parts in
   let f path =
@@ -512,6 +525,7 @@ let normalize_dune ~dir
   ; file_outs = file_outs'
   ; include_subdirs
   ; has_env
+  ; data_only_dirs
   }
 
 let extract_rule_deps args =
@@ -581,6 +595,8 @@ let rec process_sexp' ~dir ~args = function
       { empty_dune with include_subdirs = Some value }
   | "env" ->
       { empty_dune with has_env = true }
+  | "data_only_dirs" ->
+      { empty_dune with data_only_dirs = multi_value_args args; has_env = true }
   | _ ->
       empty_dune
 
@@ -598,7 +614,10 @@ and process_sexp_file filename =
 type process_dir_result =
   { children : dune_info list; descendants : dune_info list; success : bool }
 
-type process_dir_ctx = string list (* list of files to be added to file_deps *)
+type process_dir_ctx =
+  { file_deps : string list (* list of files to be added to file_deps *)
+  ; ignore_dirs : string list
+  }
 
 let def_pd_result = { children = []; descendants = []; success = true }
 
@@ -630,8 +649,8 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
     else String.chop_prefix_exn ~prefix:(dir ^ "/")
   in
   let dir_contents = Stdlib.Sys.readdir dir |> Array.to_list in
-  let ctx' =
-    ctx
+  let file_deps' =
+    ctx.file_deps
     @ List.filter_map dir_contents ~f:(fun f ->
           let f' =
             if String.equal dir "." then f else Stdlib.Filename.concat dir f
@@ -639,20 +658,29 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
           Option.some_if
             String.(
               equal f "opam" || equal f "dune-project"
-              || is_suffix ~suffix:".opam" f)
+              || is_suffix ~suffix:".opam" f )
             f' )
   in
-  let ctx'' =
-    ctx'
-    @ Option.value_map ~default:[] dune_opt ~f:(fun { has_env; file_deps; _ } ->
-          if has_env then dune_file :: file_deps else [] )
+  let ctx' =
+    { file_deps =
+        file_deps'
+        @ Option.value_map ~default:[] dune_opt
+            ~f:(fun { has_env; file_deps; _ } ->
+              if has_env then dune_file :: file_deps else [] )
+    ; ignore_dirs =
+        ctx.ignore_dirs
+        @ Option.value_map ~default:[] dune_opt ~f:(fun { data_only_dirs; _ } ->
+              List.map ~f:(fun d -> dir ^ "/" ^ d) data_only_dirs )
+    }
   in
   let continue_f sub_result =
     match dune_opt with
     | None ->
         { sub_result with success = sub_result.success && ok }
     | Some dune_ ->
-        let dune = { dune_ with file_deps = dune_.file_deps @ ctx' } in
+        let dune =
+          { dune_ with file_deps = dune_.file_deps @ ctx'.file_deps }
+        in
         let subdirs =
           List.map ~f:(fun { src; _ } -> chop_prefix src) sub_result.children
         in
@@ -666,12 +694,18 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
         if String.equal dir "." then f else Stdlib.Filename.concat dir f
       in
       try
-        if Stdlib.Sys.is_directory f' then Some (process_dir ctx'' f') else None
+        if
+          Stdlib.Sys.is_directory f'
+          && not (List.mem ~equal:String.equal ctx'.ignore_dirs f')
+        then Some (process_dir ctx' f')
+        else None
       with _ -> None )
   |> merge_pd_results |> continue_f
 
 let run () =
-  let { children; descendants; success } = process_dir [] "." in
+  let { children; descendants; success } =
+    process_dir { file_deps = []; ignore_dirs = [] } "."
+  in
   Yojson.Basic.to_channel Stdio.stdout (result_to_json (children @ descendants)) ;
   if not success then Stdlib.exit 10
 
