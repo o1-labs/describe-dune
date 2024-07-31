@@ -1,4 +1,4 @@
-# describe-dune: convert opam file syntax to JSON
+# describe-dune: convert dune project to a compact JSON description
 
 `describe-dune` finds [dune](https://dune.readthedocs.io/en/stable/reference/dune/index.html)
 files in the directory and extracts their library and file dependencies.
