@@ -1,7 +1,7 @@
 # describe-dune: convert opam file syntax to JSON
 
 `describe-dune` finds [dune](https://dune.readthedocs.io/en/stable/reference/dune/index.html)
-files in the directory and extracts their libary and file dependencies.
+files in the directory and extracts their library and file dependencies.
 
 Produced mapping doesn't perfectly match to dune structure in handling file dependencies. It's assumed that all stanzas in a dune file depend on the very same set of files, whereas in reality they might be not. It may lead to a circular dependency appearing in file dependency analysis whereas on level of stanzas there is none. This file dependency simplification is kept to ease format and semantics.
 It's a advised to change structure of a project if two dune files cross-depend on generated files.
