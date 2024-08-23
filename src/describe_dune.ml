@@ -33,6 +33,7 @@ type dune_unit =
   ; deps : string list
   ; modules : modules option
   ; has_inline_tests : bool
+  ; forbidden_libraries : string list
   }
 
 let str x = `String x
@@ -52,6 +53,7 @@ let unit_to_json
       ; deps
       ; modules
       ; has_inline_tests
+      ; forbidden_libraries
       }
     , type_ ) =
   let type_json =
@@ -83,7 +85,11 @@ let unit_to_json
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("modules", `Assoc (modules_to_json_fields v)) ])
         modules
-    @ if has_inline_tests then [ ("has_inline_tests", `Bool true) ] else []
+    @ (if has_inline_tests then [ ("has_inline_tests", `Bool true) ] else [])
+    @
+    if List.is_empty forbidden_libraries then []
+    else
+      [ ("forbidden_libraries", `List (List.map ~f:str forbidden_libraries)) ]
   in
   `Assoc res
 
@@ -386,6 +392,10 @@ let process_unit type_ args =
     let has_inline_tests =
       find_stanza_opt "inline_tests" args |> Option.is_some
     in
+    let forbidden_libraries =
+      find_multi_value_opt "forbidden_libraries" args
+      |> Option.value ~default:[]
+    in
     let deps, file_deps = extract_unit_deps args in
     { units =
         [ ( { name
@@ -396,6 +406,7 @@ let process_unit type_ args =
             ; default_implementation
             ; modules
             ; has_inline_tests
+            ; forbidden_libraries
             }
           , type_ )
         ]
@@ -414,6 +425,9 @@ let process_executables type_ args =
   let has_inline_tests =
     find_stanza_opt "inline_tests" args |> Option.is_some
   in
+  let forbidden_libraries =
+    find_multi_value_opt "forbidden_libraries" args |> Option.value ~default:[]
+  in
   let deps, file_deps = extract_unit_deps args in
   let mk_unit name =
     ( { public_name = None
@@ -424,6 +438,7 @@ let process_executables type_ args =
       ; default_implementation = None
       ; modules
       ; has_inline_tests
+      ; forbidden_libraries
       }
     , type_ )
   in
@@ -439,6 +454,7 @@ let process_executables type_ args =
       ; default_implementation = None
       ; modules
       ; has_inline_tests
+      ; forbidden_libraries
       }
     , type_ )
   in
