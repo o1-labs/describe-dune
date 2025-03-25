@@ -25,7 +25,7 @@ type modules =
   { with_standard : bool; include_ : string list; exclude : string list }
 
 type dune_unit =
-  { name : string
+  { name : string option
   ; public_name : string option
   ; package : string option
   ; implements : string option
@@ -66,10 +66,8 @@ let unit_to_json
         "test"
   in
   let res =
-    [ ("name", `String name)
-    ; ("type", `String type_json)
-    ; ("deps", `List (List.map ~f:str deps))
-    ]
+    [ ("type", `String type_json); ("deps", `List (List.map ~f:str deps)) ]
+    @ Option.value_map ~default:[] ~f:(fun v -> [ ("name", `String v) ]) name
     @ Option.value_map ~default:[]
         ~f:(fun v -> [ ("public_name", `String v) ])
         public_name
@@ -381,7 +379,7 @@ let process_unit type_ args =
   in
   if is_disabled then empty_dune
   else
-    let name = find_single_value "name" args in
+    let name = find_single_value_opt "name" args in
     let public_name = find_single_value_opt "public_name" args in
     let package = find_single_value_opt "package" args in
     let default_implementation =
@@ -419,7 +417,7 @@ let process_unit type_ args =
 
 let process_executables type_ args =
   let package = find_single_value_opt "package" args in
-  let names = find_multi_value "names" args in
+  let names = find_multi_value_opt "names" args in
   let public_names = find_multi_value_opt "public_names" args in
   let modules = parse_modules_opt "modules" args in
   let has_inline_tests =
@@ -429,9 +427,22 @@ let process_executables type_ args =
     find_multi_value_opt "forbidden_libraries" args |> Option.value ~default:[]
   in
   let deps, file_deps = extract_unit_deps args in
-  let mk_unit name =
+  let mk_unit_public_name_only public_name =
+    ( { public_name = Some public_name
+      ; name = None
+      ; package
+      ; deps
+      ; implements = None
+      ; default_implementation = None
+      ; modules
+      ; has_inline_tests
+      ; forbidden_libraries
+      }
+    , type_ )
+  in
+  let mk_unit_name_only name =
     ( { public_name = None
-      ; name
+      ; name = Some name
       ; package
       ; deps
       ; implements = None
@@ -447,7 +458,7 @@ let process_executables type_ args =
       if String.equal public_name "-" then None else Some public_name
     in
     ( { public_name
-      ; name
+      ; name = Some name
       ; package
       ; deps
       ; implements = None
@@ -459,11 +470,15 @@ let process_executables type_ args =
     , type_ )
   in
   let units =
-    match public_names with
-    | Some pns ->
-        List.map2_exn ~f:mk_unit2 names pns
-    | None ->
-        List.map ~f:mk_unit names
+    match (names, public_names) with
+    | Some ns, Some pns ->
+        List.map2_exn ~f:mk_unit2 ns pns
+    | Some ns, _ ->
+        List.map ~f:mk_unit_name_only ns
+    | _, Some pns ->
+        List.map ~f:mk_unit_public_name_only pns
+    | None, None ->
+        failwith "neither names nor public_names defined for executables stanza"
   in
   { units
   ; file_deps
@@ -674,7 +689,7 @@ let rec process_dir : process_dir_ctx -> string -> process_dir_result =
           Option.some_if
             String.(
               equal f "opam" || equal f "dune-project"
-              || is_suffix ~suffix:".opam" f )
+              || is_suffix ~suffix:".opam" f)
             f' )
   in
   let ctx' =
